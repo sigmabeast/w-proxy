@@ -1,7 +1,6 @@
 {
   "name": "puppeteer-proxy",
   "version": "1.0.0",
-  "description": "Render Puppeteer Proxy",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
