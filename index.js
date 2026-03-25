@@ -1,25 +1,28 @@
 const express = require("express");
 const puppeteer = require("puppeteer-core");
 const chromium = require("@sparticuz/chromium");
+const { URL } = require("url"); // Hilfsmodul für URLs
 
 const app = express();
 
+// HIER DEINE RENDER URL EINTRAGEN (Ohne Slash am Ende!)
+const PROXY_URL = "https://w-unblocker.onrender.com";
+
 app.get("/", (req, res) => {
-  res.send("Proxy läuft (Optimierte Version).");
+  res.send("Proxy läuft. Nutze /proxy?url=...");
 });
 
 app.get("/proxy", async (req, res) => {
-  const url = req.query.url;
-  if (!url) return res.status(400).send("Keine URL angegeben.");
-
-  // Blockiere Bilder und Fonts, um Daten zu sparen und schneller zu laden (optional)
-  const blockResources = req.query.block !== 'false'; 
+  const targetUrl = req.query.url;
+  if (!targetUrl) return res.status(400).send("Keine URL angegeben.");
 
   let browser = null;
 
   try {
+    // Ziel-URL parsen, um den Basis-Pfad zu kennen
+    const targetBase = new URL(targetUrl);
+
     const executablePath = await chromium.executablePath();
-    
     browser = await puppeteer.launch({
       executablePath: executablePath,
       args: chromium.args,
@@ -29,45 +32,48 @@ app.get("/proxy", async (req, res) => {
 
     const page = await browser.newPage();
 
-    // 1. BLOCKIEREN VON RESSOURCEN (Optional, macht es viel schneller)
-    // Wenn du Bilder/CSS nicht brauchst, lass das aktiviert.
-    if (blockResources) {
-      await page.setRequestInterception(true);
-      page.on('request', (req) => {
-        const type = req.resourceType();
-        // Blockiere Bilder, Fonts und Stylesheets um Bandbreite zu sparen
-        if (['image', 'font', 'stylesheet'].includes(type)) {
-          req.abort();
-        } else {
-          req.continue();
-        }
-      });
-    }
-
-    // 2. SEITE LADEN (Nicht auf "networkidle" warten!)
-    // 'domcontentloaded' ist viel schneller. Wir warten nicht auf jedes Werbebild.
-    await page.goto(url, { 
+    // Wir blockieren NICHTS mehr, damit Styles und Bilder geladen werden
+    // Wir laden die Seite
+    await page.goto(targetUrl, { 
       waitUntil: "domcontentloaded", 
-      timeout: 30000 // 30 Sekunden Timeout
+      timeout: 30000 
     });
 
-    // 3. WARTEN AUF INHALT (Das ist der Trick für komplexe Seiten!)
-    // Wir warten explizit darauf, dass der Body fertig ist.
-    // Bei News-Seiten oder Google könnte man hier auf spezifische Selektoren warten.
+    // Warten, damit JS Inhalte nachladen kann
     try {
-      await page.waitForSelector('body', { timeout: 5000 });
-      // Optional: Warte noch mal kurz, damit JavaScript nachladen kann
-      await new Promise(r => setTimeout(r, 2000)); 
-    } catch (e) {
-      // Falls timeout, machen wir trotzdem weiter mit dem was wir haben
-      console.log("Timeout beim Warten auf Body, nehme was da ist.");
-    }
+      await page.waitForSelector('body', { timeout: 3000 });
+      await new Promise(r => setTimeout(r, 1000)); 
+    } catch (e) {}
 
-    // 4. INHALT HOLEN
-    // Wir holen das komplette HTML
-    const content = await page.content();
+    // HTML holen
+    let content = await page.content();
 
     await browser.close();
+
+    // --- DIE MAGIE: URL REWRITING ---
+    // Wir ersetzen alle Links, damit sie durch den Proxy laufen
+    
+    // 1. Absolute Links (http://seite.com/css...) umschreiben
+    // Sucht nach href="http..." und src="http..."
+    content = content.replace(/(href|src|action)=["'](https?:\/\/[^"']+)["']/gi, (match, attr, url) => {
+      // Die URL durch unseren Proxy leiten
+      return `${attr}="${PROXY_URL}/proxy?url=${encodeURIComponent(url)}"`;
+    });
+
+    // 2. Relative Links (/css/style.css) umschreiben
+    // Sucht nach href="/css..." und src="/images..."
+    content = content.replace(/(href|src|action)=["'](\/[^"']*)["']/gi, (match, attr, path) => {
+      // Basis-URL der Zielseite + Pfad bauen
+      const fullUrl = new URL(path, targetBase.origin).href;
+      return `${attr}="${PROXY_URL}/proxy?url=${encodeURIComponent(fullUrl)}"`;
+    });
+    
+    // 3. CSS-Links in <head> reparieren (manchmal spezielle Syntax)
+    content = content.replace(/url\(["']?(\/[^"')]+)["']?\)/gi, (match, path) => {
+        const fullUrl = new URL(path, targetBase.origin).href;
+        return `url("${PROXY_URL}/proxy?url=${encodeURIComponent(fullUrl)}")`;
+    });
+
     res.send(content);
 
   } catch (e) {
