@@ -17,9 +17,12 @@ app.get("/proxy", async (req, res) => {
   let browser = null;
 
   try {
-    // Startet den Browser mit speziellen Einstellungen für Server-Umgebungen
+    // HIER IST DIE LÖSUNG:
+    // Wir starten Puppeteer OHNE spezifischen executablePath.
+    // Wenn eine Env-Variable 'PUPPETEER_EXECUTABLE_PATH' existiert (von Render),
+    // wird sie von puppeteer.executablePath() automatisch korrekt aufgelöst.
     browser = await puppeteer.launch({
-      // WICHTIG: Diese Argumente sind notwendig auf Render/Linux
+      executablePath: puppeteer.executablePath(), // Zwingt die Nutzung der mitgelieferten Chromium-Version
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
@@ -29,24 +32,19 @@ app.get("/proxy", async (req, res) => {
         "--single-process",
         "--disable-gpu"
       ],
-      // Headless Modus ist Pflicht auf Servern
       headless: "new",
-      // Ignoriert HTTPS Fehler (optional)
       ignoreHTTPSErrors: true
     });
 
     const page = await browser.newPage();
     
-    // Setzt einen User-Agent, damit Seiten nicht den Bot blockieren
     await page.setUserAgent('Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36');
 
-    // Seite laden
     await page.goto(url, { 
-      waitUntil: "domcontentloaded", // Schneller als networkidle2
+      waitUntil: "domcontentloaded",
       timeout: 60000 
     });
 
-    // Inhalt holen
     const content = await page.content();
 
     await browser.close();
@@ -54,7 +52,7 @@ app.get("/proxy", async (req, res) => {
 
   } catch (e) {
     console.error("Proxy Error:", e);
-    if (browser) await browser.close(); // Sicherheitshalber schließen
+    if (browser) await browser.close();
     res.status(500).send("Fehler beim Laden: " + e.message);
   }
 });
